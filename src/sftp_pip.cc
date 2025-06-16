@@ -20,6 +20,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "libssh/libssh.h"
 #include "sftp_pip_impl.h"
 
 std::atomic<bool> running(true);
@@ -76,6 +77,8 @@ void task_thread()
 
 void response(int cmd, int id, int status, const std::string& response);
 
+#define SFTP_PIP_VERSION "version 0.0.1"
+
 int main()
 {
 #ifdef _WIN32
@@ -85,13 +88,14 @@ int main()
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 #endif
+    ssh_init();
 
     std::thread worker(task_thread);
     worker.detach();
 
     std::string line;
     std::vector<std::string> msgs;
-    response(CMD_READY, 0, RES_HELLO, "");
+    response(CMD_READY, 0, RES_HELLO, SFTP_PIP_VERSION);
     while (running && std::getline(std::cin, line))
     {
         if (std::cin.eof()) { break; }
@@ -109,6 +113,7 @@ int main()
 
     running = false;
     taskQueue_condition.notify_all();
+    ssh_finalize();
     return 0;
 }
 

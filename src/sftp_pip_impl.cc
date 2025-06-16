@@ -3,6 +3,7 @@
 #include <fstream>
 #include <sstream>
 #include <stack>
+#include <string>
 #include <unordered_map>
 #include <fcntl.h>
 #include <thread>
@@ -75,7 +76,6 @@ bool session_init(SFTPSession& session, Responser response, int cmd, int id)
         return false;
     }
 
-    response(cmd,id, RES_INFO, "去你妈的");
     response(cmd, id, RES_INFO, fmt::format("SSH authentication success. host({}:{}) username({})", session.hostname, session.port, session.uname));
 
     // Create SFTP session
@@ -146,10 +146,10 @@ namespace fs = std::filesystem;
 std::string ensure_remote_dir(sftp_session sftp, const std::string& remote_path);
 std::string sftp_error_str(int code);
 
-int upload_one_file(SFTPSession& session, int id, const std::string& localRoot, const std::string remoteRoot, std::string_view path, Responser response)
+int upload_one_file(SFTPSession& session, int id, const std::string& localRoot, const std::string& remoteRoot, std::string_view path, Responser response)
 {
     std::string abs_local = fs::absolute(fs::path(localRoot) / path).string();
-    std::string abs_remote = fs::absolute(fs::path(remoteRoot) / path).generic_string();
+    std::string abs_remote = (fs::path(remoteRoot) / path).generic_string();
 
     std::ifstream file(abs_local, std::ios::binary);
 
@@ -163,6 +163,7 @@ int upload_one_file(SFTPSession& session, int id, const std::string& localRoot, 
 
     // local file exists
     sftp_file remote_file = sftp_open(session.sftp, abs_remote.data(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
+
     if (!remote_file)
     {
         // remote file not exists or error
@@ -173,6 +174,7 @@ int upload_one_file(SFTPSession& session, int id, const std::string& localRoot, 
             if (mkdir_r == "") { remote_file = sftp_open(session.sftp, abs_remote.data(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU); }
         }
     }
+
 
     if (!remote_file)
     {
@@ -210,6 +212,7 @@ int upload_one_file(SFTPSession& session, int id, const std::string& localRoot, 
 
 void uploads(const ReqHead& head, std::vector<std::string>& msgs, Responser response)
 {
+
     auto id = head.id;
     auto sessionId = head.sessionId;
     auto localRoot = msgs[1];
@@ -225,11 +228,14 @@ void uploads(const ReqHead& head, std::vector<std::string>& msgs, Responser resp
 
     auto& session = sftp_sessions[sessionId];
 
+
     for (size_t i = 3; i < msgs.size(); ++i)
     {
         auto& path = msgs[i];
         auto err = -1;
         err = upload_one_file(session, id, localRoot, remoteRoot, path, response);
+        response(CMD_UPLOADS, head.id, RES_DONE, std::to_string(msgs.size()));
+        return;
         if (err != 0){
             if (err == SSH_FX_NO_CONNECTION || err == SSH_FX_CONNECTION_LOST){
                 auto retry = 0;
@@ -375,6 +381,7 @@ std::string ensure_remote_dir(sftp_session sftp, const std::string& remote_path)
     size_t pos;
     std::stack<std::string> mkdir_commands;
     std::string subdir = remote_path.substr(0, remote_path.find_last_of('/'));
+    
     while (!sftp_opendir(sftp, subdir.c_str()))
     {
         if (sftp_opendir(sftp, subdir.c_str())) { break; }
