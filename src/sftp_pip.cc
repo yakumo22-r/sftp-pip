@@ -127,8 +127,10 @@ void response(int cmd, int id, int status, const std::string& response)
 
 void process_handle(std::vector<std::string>& msgs)
 {
+
     if (msgs.size() < 1) { return; }
     ReqHead head;
+    std::string msg = "";
     get_req_head(msgs[0], head);
     switch (head.cmd)
     {

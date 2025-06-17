@@ -91,7 +91,6 @@ bool session_init(SFTPSession& session, Responser response, int cmd, int id)
             return false;
         }
 
-        // response(CMD_READY, id, RES_INFO, fmt::format("{} \n debug", "password"));
     }
 
     auto str = fmt::format("SSH login success. host({}:{}) username({})", session.hostname, session.port, session.uname);
@@ -146,7 +145,6 @@ void new_session(const ReqHead& head, std::vector<std::string>& msgs, Responser 
     session.uname = msgs[2];
     session.password = msgs[3];
 
-    // response(CMD_READY, id, RES_INFO, fmt::format("{} \n debug", msgs[4]));
     // return;
     if (msgs[4] == "")
         session.port = 0;
@@ -214,8 +212,15 @@ int upload_one_file(ActionArgs& action)
         // remote file not exists or error
         int errcode = sftp_get_error(session.sftp);
         if (errcode == SSH_FX_NO_SUCH_FILE) {
-            auto mkdir_r = ensure_remote_dir(session.sftp, abs_remote);
-            if (mkdir_r == "") { remote_file = sftp_open(session.sftp, abs_remote.data(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU); }
+            auto err = ensure_remote_dir(session.sftp, abs_remote);
+            if (err == "") {
+                remote_file = sftp_open(session.sftp, abs_remote.data(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
+            } else {
+                response(                       //
+                    CMD_UPLOADS, id, RES_ERROR, //
+                    err);
+                return errcode;
+            }
         }
     }
 
@@ -258,9 +263,6 @@ void uploads(const ReqHead& head, std::vector<std::string>& msgs, Responser resp
     actionArgs.remoteRoot = msgs[2];
     actionArgs.response = response;
     auto sessionId = head.sessionId;
-
-    // response(CMD_READY, id, RES_INFO, fmt::format("len {} \n debug", msgs.size()));
-    // response(CMD_READY, id, RES_INFO, fmt::format("1 {} \n debug", msgs[1]));
 
     if (!sftp_sessions.count(sessionId)) {
         response(                            //
@@ -437,11 +439,18 @@ std::string ensure_remote_dir(sftp_session sftp, const std::string& remote_path)
     std::stack<std::string> mkdir_commands;
     std::string subdir = remote_path.substr(0, remote_path.find_last_of('/'));
 
-    while (!sftp_opendir(sftp, subdir.c_str())) {
-        if (sftp_opendir(sftp, subdir.c_str())) { break; }
+    auto opendir = sftp_opendir(sftp, subdir.c_str());
+    while (!opendir) {
         mkdir_commands.push(subdir);
-        subdir.erase(subdir.find_last_of('/'));
+        int i = subdir.find_last_of('/');
+        if (i <= 0){
+            break;
+        }
+        subdir.erase(i);
+        opendir = sftp_opendir(sftp, subdir.c_str());
     }
+
+    if (opendir) sftp_closedir(opendir);
 
     while (!mkdir_commands.empty()) {
         auto& path = mkdir_commands.top();
