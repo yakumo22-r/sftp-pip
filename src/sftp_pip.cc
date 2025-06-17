@@ -3,9 +3,6 @@
   interface for pip
 
   [ ] custom port
-  [ ] use password
-  [ ] cunstom port
-  [ ] test for neovim
   [ ] review/clean code
 */
 #include "fmt/base.h"
@@ -54,12 +51,15 @@ std::string trim(std::string_view str)
     return std::string(start, end);
 }
 
+void response(int cmd, int id, int status, const std::string& response);
+
 void task_thread()
 {
     while (running)
     {
         Task task;
         {
+
             std::unique_lock<std::mutex> lock(taskQueue_mutex);
             taskQueue_condition.wait(lock, [] { return !taskQueue.empty() || !running; });
             if (!running) { return; }
@@ -75,9 +75,8 @@ void task_thread()
     }
 }
 
-void response(int cmd, int id, int status, const std::string& response);
 
-#define SFTP_PIP_VERSION "version 0.0.1"
+#define SFTP_PIP_VERSION "version 0.0.2"
 
 int main()
 {
@@ -128,7 +127,6 @@ void response(int cmd, int id, int status, const std::string& response)
 void process_handle(std::vector<std::string>& msgs)
 {
     if (msgs.size() < 1) { return; }
-
     ReqHead head;
     get_req_head(msgs[0], head);
     switch (head.cmd)

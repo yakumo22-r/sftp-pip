@@ -1,4 +1,5 @@
 #include "sftp_pip_impl.h"
+#include "libssh/libssh.h"
 
 #include <fstream>
 #include <sstream>
@@ -18,6 +19,7 @@ struct SFTPSession
     std::string hostname;
     unsigned int port;
     std::string uname;
+    std::string password;
     bool is_login;
 };
 
@@ -37,8 +39,10 @@ void clear_login(SFTPSession& session)
 
 bool session_init(SFTPSession& session, Responser response, int cmd, int id)
 {
+
     clear_login(session);
     session.ssh = ssh_new();
+
     ssh_options_parse_config(session.ssh, nullptr);
 
     ssh_options_set(session.ssh, SSH_OPTIONS_HOST, session.hostname.c_str());
@@ -57,24 +61,49 @@ bool session_init(SFTPSession& session, Responser response, int cmd, int id)
         return false;
     }
 
-    char* uname_cstr = nullptr;
-    ssh_options_get(session.ssh, SSH_OPTIONS_USER, &uname_cstr);
-    session.uname = uname_cstr;
 
-    ssh_options_get_port(session.ssh, &session.port);
+    if(session.password.empty()){
+        if (session.uname.empty()){
+            char* uname_cstr = nullptr;
+            ssh_options_get(session.ssh, SSH_OPTIONS_USER, &uname_cstr);
+            session.uname = uname_cstr;
+        }else{
+            ssh_options_set(session.ssh, SSH_OPTIONS_USER, session.uname.c_str());
+        }
 
-    auto str = fmt::format("SSH connect success. host({}:{}) username({})", session.hostname, session.port, session.uname);
+        if (session.port){
+            ssh_options_set(session.ssh, SSH_OPTIONS_PORT, &session.port);
+        }else{
+            ssh_options_get_port(session.ssh, &session.port);
+        }
+
+        if (ssh_userauth_publickey_auto(session.ssh, nullptr, nullptr) != SSH_AUTH_SUCCESS)
+        {
+            response(
+                cmd, id, ERRSTATUS, //
+                fmt::format("SSH authentication failed. host({}:{}) username({}), {}", session.hostname, session.port, session.uname, ssh_get_error(session.ssh)));
+            clear_login(session);
+            return false;
+        }
+    }else{
+        if (session.port){
+            ssh_options_set(session.ssh, SSH_OPTIONS_PORT, &session.port);
+        }
+        if(ssh_userauth_password(session.ssh, session.uname.c_str(), session.password.c_str()) != SSH_AUTH_SUCCESS)
+        {
+            response(cmd, id, ERRSTATUS, //
+                     fmt::format("SSH authentication failed. host({}:{}) username({}), {}", session.hostname, session.port, session.uname, ssh_get_error(session.ssh)));
+            clear_login(session);
+            return false;
+        }
+
+        response(CMD_READY, id, RES_INFO, fmt::format("{} \n debug", "password"));
+    }
+
+
+    auto str = fmt::format("SSH login success. host({}:{}) username({})", session.hostname, session.port, session.uname);
     response(cmd, id, RES_INFO, str);
 
-    // Auth
-    if (ssh_userauth_publickey_auto(session.ssh, nullptr, nullptr) != SSH_AUTH_SUCCESS)
-    {
-        response(
-            cmd, id, ERRSTATUS, //
-            fmt::format("SSH authentication failed. host({}:{}) username({}), {}", session.hostname, session.port, session.uname, ssh_get_error(session.ssh)));
-        clear_login(session);
-        return false;
-    }
 
     response(cmd, id, RES_INFO, fmt::format("SSH authentication success. host({}:{}) username({})", session.hostname, session.port, session.uname));
 
@@ -123,14 +152,22 @@ void new_session(const ReqHead& head, std::vector<std::string>& msgs, Responser 
     session.sftp = nullptr;
     session.is_login = false;
 
+
     session.hostname = msgs[1];
     session.uname = msgs[2];
+    session.password = msgs[3];
 
-    if (!session_init(session, response, CMD_NEW_SESSION, id)) { response(CMD_NEW_SESSION, id, RES_ERROR_DONE, "Failed to initialize SFTP session"); }
+    // response(CMD_READY, id, RES_INFO, fmt::format("{} \n debug", msgs[4]));
+    // return;
+    if (msgs[4] == "") session.port = 0;
+    else session.port = std::stoi(msgs[4]);
+
+    if (!session_init(session, response, CMD_NEW_SESSION, id)) {
+        response(CMD_NEW_SESSION, id, RES_ERROR_DONE, "Failed to initialize SFTP session"); }
     else
     {
         sftp_sessions[session_count] = session;
-        response(CMD_NEW_SESSION, id, RES_DONE, std::to_string(session_count));
+        response(CMD_NEW_SESSION, id, RES_DONE, fmt::format("{}\ncreate new session successfully", session_count));
         session_count++;
     }
 }
@@ -253,7 +290,8 @@ void uploads(const ReqHead& head, std::vector<std::string>& msgs, Responser resp
         }
     }
 
-    response(CMD_UPLOADS, id, RES_DONE, std::to_string(sessionId));
+    
+    response(CMD_UPLOADS, id, RES_DONE, fmt::format("{}\n Upload Done", sessionId));
 }
 
 int download_one_file(SFTPSession& session, int id, const std::string& localRoot, const std::string remoteRoot, std::string_view path, Responser response)
@@ -334,7 +372,7 @@ void downloads(const ReqHead& head, std::vector<std::string>& msgs, Responser re
         }
     }
 
-    response(CMD_DOWNLOADS, id, RES_DONE, std::to_string(sessionId));
+    response(CMD_UPLOADS, id, RES_DONE, fmt::format("{}\n Sync Done", sessionId));
 }
 
 void close_session(const ReqHead& head, std::vector<std::string>& msgs, Responser response)
