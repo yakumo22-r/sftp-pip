@@ -67,6 +67,7 @@ void task_thread()
             taskQueue.pop();
         }
 
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         for (auto& arg : task.args)
         {
             if (trim(arg) == "#") { arg.clear(); }
