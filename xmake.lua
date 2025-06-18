@@ -6,7 +6,7 @@ if is_plat("macosx") then
     set_arch("x86_64")
 end
 
-target("sftp_pip")
+local function sftp_pip()
     set_languages("cxx17")
     add_files(
         "src/sftp_pip.cc",
@@ -24,3 +24,13 @@ target("sftp_pip")
         -- Copy to the project root (current directory)
         os.cp(targetfile, ".")
     end)
+end
+
+target("sftp_pip_d")
+sftp_pip()
+
+target("sftp_pip")
+set_optimize("smallest")
+add_ldflags("-s", {force = true})
+set_symbols("none")
+sftp_pip()
