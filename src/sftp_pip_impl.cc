@@ -155,7 +155,7 @@ void new_session(const ReqHead& head, std::vector<std::string>& msgs, Responser 
         response(CMD_NEW_SESSION, id, RES_ERROR_DONE, "Failed to initialize SFTP session");
     } else {
         sftp_sessions[session_count] = session;
-        response(CMD_NEW_SESSION, id, RES_DONE, fmt::format("{}\ncreate new session successfully", session_count));
+        response(CMD_NEW_SESSION, id, RES_DONE, fmt::format("{}\ncreate new session successfully -> {}", session_count, session.hostname));
         session_count++;
     }
 }
@@ -273,7 +273,7 @@ void uploads(const ReqHead& head, std::vector<std::string>& msgs, Responser resp
 
     actionArgs.session = &sftp_sessions[sessionId];
 
-    response(CMD_UPLOADS, head.id, RES_INFO, fmt::format(">>>>>>>>>>>>>> start upload files count({})", msgs.size() - 3));
+    response(CMD_UPLOADS, head.id, RES_INFO, fmt::format(">>>>>>>>>>>>>> {} start upload files count({})",actionArgs.session->hostname, msgs.size() - 3));
 
     for (size_t i = 3; i < msgs.size(); ++i) {
         actionArgs.path = msgs[i];
@@ -286,7 +286,7 @@ void uploads(const ReqHead& head, std::vector<std::string>& msgs, Responser resp
         }
     }
 
-    response(CMD_UPLOADS, actionArgs.id, RES_DONE, fmt::format("<<<<<<<<<<< Upload Done count() session({})", msgs.size() - 3, sessionId));
+    response(CMD_UPLOADS, actionArgs.id, RES_DONE, fmt::format("<<<<<<<<<<< {} upload done count() session({})", actionArgs.session->hostname, msgs.size() - 3, sessionId));
 }
 
 int download_one_file(ActionArgs& action)
@@ -348,7 +348,7 @@ void downloads(const ReqHead& head, std::vector<std::string>& msgs, Responser re
 
     actionArgs.session = &sftp_sessions[sessionId];
 
-    response(CMD_DOWNLOADS, head.id, RES_INFO, fmt::format(">>>>>>>>>>>>>> start download files count({})", msgs.size() - 3));
+    response(CMD_DOWNLOADS, head.id, RES_INFO, fmt::format(">>>>>>>>>>>>>> {} start download files count({})", actionArgs.session->hostname, msgs.size() - 3));
 
     for (size_t i = 5; i < msgs.size(); ++i) {
         actionArgs.path = msgs[i];
@@ -361,7 +361,7 @@ void downloads(const ReqHead& head, std::vector<std::string>& msgs, Responser re
         }
     }
 
-    response(CMD_DOWNLOADS, actionArgs.id, RES_DONE, fmt::format("<<<<<<<<<<< Downboad Done count() session({})", msgs.size() - 3, sessionId));
+    response(CMD_DOWNLOADS, actionArgs.id, RES_DONE, fmt::format("<<<<<<<<<<< {} downboad done count() session({})",actionArgs.session->hostname, msgs.size() - 3, sessionId));
 }
 
 void close_session(const ReqHead& head, std::vector<std::string>& msgs, Responser response)

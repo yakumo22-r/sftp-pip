@@ -77,7 +77,7 @@ void task_thread()
 }
 
 
-#define SFTP_PIP_VERSION "version 0.0.2"
+#define SFTP_PIP_VERSION "version 0.0.5"
 
 int main()
 {
