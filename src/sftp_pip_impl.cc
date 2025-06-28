@@ -11,6 +11,7 @@
 
 #include <libssh/sftp.h>
 #include <fmt/format.h>
+#include <valarray>
 
 struct SFTPSession
 {
@@ -21,6 +22,38 @@ struct SFTPSession
     std::string uname;
     std::string password;
     bool is_login;
+};
+
+struct Err
+{
+  private:
+    int err;
+    int _code;
+
+  public:
+    static Err success(){
+        Err err;
+        err.err = 0;
+        err._code = 0;
+        return err;
+    }
+    static Err error(int code)
+    {
+        Err err;
+        err.err = 1;
+        err._code = code;
+        return err;
+    }
+    static Err sftpError(int code)
+    {
+        Err err;
+        err.err = 2;
+        err._code = code == 0 ? 14 : 0;
+        return err;
+    }
+    bool isSftpErr()const { return err == 2; }
+    operator bool()const { return err; }
+    int code()const {return _code;}
 };
 
 std::unordered_map<int, SFTPSession> sftp_sessions;
@@ -90,7 +123,6 @@ bool session_init(SFTPSession& session, Responser response, int cmd, int id)
             clear_login(session);
             return false;
         }
-
     }
 
     auto str = fmt::format("SSH login success. host({}:{}) username({})", session.hostname, session.port, session.uname);
@@ -168,7 +200,8 @@ namespace fs = std::filesystem;
 #define S_IRWXU 0700
 #endif
 
-struct ActionArgs{
+struct ActionArgs
+{
     int id;
     int cmd;
     SFTPSession* session;
@@ -184,9 +217,9 @@ int check_reconnect_action(ActionArgs& action);
 std::string ensure_remote_dir(sftp_session sftp, const std::string& remote_path);
 std::string sftp_error_str(int code);
 
-int upload_one_file(ActionArgs& action)
+Err upload_one_file(ActionArgs& action)
 {
-    auto &session = *action.session;
+    auto& session = *action.session;
     int id = action.id;
     auto localRoot = action.localRoot;
     auto remoteRoot = action.remoteRoot;
@@ -202,7 +235,7 @@ int upload_one_file(ActionArgs& action)
         response(                       //
             CMD_UPLOADS, id, RES_ERROR, //
             fmt::format("Local file open failed | not found: {}", abs_local));
-        return -1;
+        return Err::error(1);
     }
 
     // local file exists
@@ -215,21 +248,20 @@ int upload_one_file(ActionArgs& action)
             auto err = ensure_remote_dir(session.sftp, abs_remote);
             if (err == "") {
                 remote_file = sftp_open(session.sftp, abs_remote.data(), O_WRONLY | O_CREAT | O_TRUNC, S_IRWXU);
+                if (!remote_file) { errcode = sftp_get_error(session.sftp); }
             } else {
                 response(                       //
                     CMD_UPLOADS, id, RES_ERROR, //
-                    err);
-                return errcode;
+                    fmt::format("ensure remote dir failed: {}", err));
+                return Err::sftpError(errcode);
             }
         }
-    }
-
-    if (!remote_file) {
-        int errcode = sftp_get_error(session.sftp);
-        response(                       //
-            CMD_UPLOADS, id, RES_ERROR, //
-            fmt::format("Remote file open failed: {}, err ({}): {}", abs_remote, errcode, sftp_error_str(errcode)));
-        return errcode;
+        if (!remote_file) {
+            response(                       //
+                CMD_UPLOADS, id, RES_ERROR, //
+                fmt::format("Remote file open failed: {}, {}", abs_remote, sftp_error_str(errcode)));
+            return Err::sftpError(errcode);
+        }
     }
 
     char buffer[4096];
@@ -242,7 +274,7 @@ int upload_one_file(ActionArgs& action)
                 CMD_UPLOADS, id, RES_ERROR, //
                 fmt::format("File upload error , remote: {}, err ({}) {}", abs_remote, errcode, sftp_error_str(errcode)));
             sftp_close(remote_file);
-            return errcode;
+            return Err::sftpError(errcode);
         }
     }
 
@@ -251,7 +283,8 @@ int upload_one_file(ActionArgs& action)
             CMD_UPLOADS, id, RES_INFO, //
             fmt::format("File uploaded successfully {} -> {}", path, abs_remote));
     }
-    return 0;
+
+    return Err::success();
 }
 
 void uploads(const ReqHead& head, std::vector<std::string>& msgs, Responser response)
@@ -265,7 +298,7 @@ void uploads(const ReqHead& head, std::vector<std::string>& msgs, Responser resp
     auto sessionId = head.sessionId;
 
     if (!sftp_sessions.count(sessionId)) {
-        response(                            //
+        response(                                       //
             CMD_UPLOADS, actionArgs.id, RES_ERROR_DONE, //
             fmt::format("Session ID ({}) not found", sessionId));
         return;
@@ -273,25 +306,31 @@ void uploads(const ReqHead& head, std::vector<std::string>& msgs, Responser resp
 
     actionArgs.session = &sftp_sessions[sessionId];
 
-    response(CMD_UPLOADS, head.id, RES_INFO, fmt::format(">>>>>>>>>>>>>> {} start upload files count({})",actionArgs.session->hostname, msgs.size() - 3));
+    response(CMD_UPLOADS, head.id, RES_INFO, fmt::format(">>>>>>>>>>>>>> {} start upload files count({})", actionArgs.session->hostname, msgs.size() - 3));
 
     for (size_t i = 3; i < msgs.size(); ++i) {
         actionArgs.path = msgs[i];
-        actionArgs.err = upload_one_file(actionArgs);
-        int r = check_reconnect_action(actionArgs);
-        if (r == 0) {
-            upload_one_file(actionArgs);
-        }else if(r<0){
-            return;
+        auto err = upload_one_file(actionArgs);
+        if (err){
+            if (err.isSftpErr()){
+                actionArgs.err =  err.code();
+                int r = check_reconnect_action(actionArgs);
+                if (r == 0) {
+                    upload_one_file(actionArgs);
+                } else if (r < 0) {
+                    return;
+                }
+            }
         }
     }
 
-    response(CMD_UPLOADS, actionArgs.id, RES_DONE, fmt::format("<<<<<<<<<<< {} upload done count() session({})", actionArgs.session->hostname, msgs.size() - 3, sessionId));
+    response(CMD_UPLOADS, actionArgs.id, RES_DONE,
+             fmt::format("<<<<<<<<<<< {} upload done count({}) session({})", actionArgs.session->hostname, msgs.size() - 3, sessionId));
 }
 
-int download_one_file(ActionArgs& action)
+Err download_one_file(ActionArgs& action)
 {
-    auto &session = *action.session;
+    auto& session = *action.session;
     int id = action.id;
     auto localRoot = action.localRoot;
     auto remoteRoot = action.remoteRoot;
@@ -306,7 +345,11 @@ int download_one_file(ActionArgs& action)
         response(                         //
             CMD_DOWNLOADS, id, RES_ERROR, //
             fmt::format("Remote file open failed: {}, err ({}): {}", abs_remote, errcode, sftp_error_str(errcode)));
-        return errcode;
+        if (errcode == SSH_FX_NO_SUCH_FILE || errcode == SSH_FX_PERMISSION_DENIED || errcode == SSH_FX_NO_SUCH_PATH){
+            return Err::error(-2);
+        }else{
+            return Err::sftpError(errcode);
+        }
     }
 
     std::ofstream localFile(abs_local, std::ios::binary);
@@ -315,7 +358,7 @@ int download_one_file(ActionArgs& action)
             CMD_DOWNLOADS, id, RES_ERROR, //
             fmt::format("Local file open failed: {}", abs_local));
         sftp_close(remote_file);
-        return -1;
+        return Err::error(-1);
     }
 
     char buffer[4096];
@@ -326,7 +369,7 @@ int download_one_file(ActionArgs& action)
     response(                        //
         CMD_DOWNLOADS, id, RES_INFO, //
         fmt::format("File downloaded successfully {} -> {}", abs_remote, path));
-    return 0;
+    return Err::success();
 }
 
 void downloads(const ReqHead& head, std::vector<std::string>& msgs, Responser response)
@@ -340,7 +383,7 @@ void downloads(const ReqHead& head, std::vector<std::string>& msgs, Responser re
     auto sessionId = head.sessionId;
 
     if (!sftp_sessions.count(sessionId)) {
-        response(                              //
+        response(                                         //
             CMD_DOWNLOADS, actionArgs.id, RES_ERROR_DONE, //
             fmt::format("Session ID ({}) not found", sessionId));
         return;
@@ -352,16 +395,21 @@ void downloads(const ReqHead& head, std::vector<std::string>& msgs, Responser re
 
     for (size_t i = 5; i < msgs.size(); ++i) {
         actionArgs.path = msgs[i];
-        actionArgs.err = download_one_file(actionArgs);
+        auto err = download_one_file(actionArgs);
+        if (err){
+
+        }
+
         int r = check_reconnect_action(actionArgs);
         if (r == 0) {
             download_one_file(actionArgs);
-        }else if(r<0){
+        } else if (r < 0) {
             return;
         }
     }
 
-    response(CMD_DOWNLOADS, actionArgs.id, RES_DONE, fmt::format("<<<<<<<<<<< {} downboad done count() session({})",actionArgs.session->hostname, msgs.size() - 3, sessionId));
+    response(CMD_DOWNLOADS, actionArgs.id, RES_DONE,
+             fmt::format("<<<<<<<<<<< {} downboad done count({}) session({})", actionArgs.session->hostname, msgs.size() - 3, sessionId));
 }
 
 void close_session(const ReqHead& head, std::vector<std::string>& msgs, Responser response)
@@ -384,31 +432,31 @@ void close_session(const ReqHead& head, std::vector<std::string>& msgs, Response
 }
 
 /** result:
-* (r==0)reconnect success  
-* (r>0)ok or other error 
-* (r<0)failed
-*/
+ * (r==0)reconnect success
+ * (r>0)ok or other error
+ * (r<0)failed
+ */
 int check_reconnect_action(ActionArgs& action)
 {
     int cmd = action.cmd;
     int err = action.err;
     int id = action.id;
     auto& session = *action.session;
-    if (err!=0){
-            action.response(cmd, id, RES_ERROR_DONE, "Failed to reinitialize SFTP session");
-            int status = ssh_get_status(session.ssh);
-            if ((status & (SSH_CLOSED | SSH_CLOSED_ERROR)) || err == SSH_FX_NO_CONNECTION || err == SSH_FX_CONNECTION_LOST) {
-                auto retry = 0;
-                while (retry < 3 && !session_init(session, action.response, CMD_UPLOADS, id)) {
-                    retry++;
-                    if (retry == 3) {
-                        action.response(cmd, id, RES_ERROR_DONE, "Failed to reinitialize SFTP session");
-                        return -1;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    if (err != 0) {
+        action.response(cmd, id, RES_ERROR, "Try to reinitialize SFTP session");
+        int status = ssh_get_status(session.ssh);
+        if ((status & (SSH_CLOSED | SSH_CLOSED_ERROR)) || err == SSH_FX_NO_CONNECTION || err == SSH_FX_CONNECTION_LOST) {
+            auto retry = 0;
+            while (retry < 3 && !session_init(session, action.response, CMD_UPLOADS, id)) {
+                retry++;
+                if (retry == 3) {
+                    action.response(cmd, id, RES_ERROR_DONE, "Failed to reinitialize SFTP session");
+                    return -1;
                 }
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
             }
-            return 0;
+        }
+        return 0;
     }
     return 1;
 };
@@ -420,6 +468,8 @@ std::string sftp_error_str(int code)
         return "Failure";
     case SSH_FX_NO_SUCH_FILE:
         return "No such file";
+    case SSH_FX_NO_SUCH_PATH:
+        return "No such path";
     case SSH_FX_PERMISSION_DENIED:
         return "Permission denied";
     case SSH_FX_NO_CONNECTION:
@@ -428,6 +478,8 @@ std::string sftp_error_str(int code)
         return "Connection lost";
     case SSH_FX_WRITE_PROTECT:
         return "Write protected";
+    case 14:
+        return "Unknow error 14";
     default:
         return fmt::format("Unknow error {}", code);
     }
@@ -443,9 +495,7 @@ std::string ensure_remote_dir(sftp_session sftp, const std::string& remote_path)
     while (!opendir) {
         mkdir_commands.push(subdir);
         int i = subdir.find_last_of('/');
-        if (i <= 0){
-            break;
-        }
+        if (i <= 0) { break; }
         subdir.erase(i);
         opendir = sftp_opendir(sftp, subdir.c_str());
     }

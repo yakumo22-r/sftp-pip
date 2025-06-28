@@ -24,6 +24,7 @@ enum
     CMD_CLOSE_SESSION = 3,
     CMD_STATUS_SESSION = 4,
     CMD_READY = 99,
+    CMD_EXIT = 100,
 };
 
 struct ReqHead{

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <csignal>
 #include <cstddef>
+#include <cstdlib>
 #include <iostream>
 #include <atomic>
 #include <mutex>
@@ -77,7 +78,7 @@ void task_thread()
 }
 
 
-#define SFTP_PIP_VERSION "version 0.0.5"
+#define SFTP_PIP_VERSION "version 0.0.7"
 
 int main()
 {
@@ -145,6 +146,12 @@ void process_handle(std::vector<std::string>& msgs)
         break;
     case CMD_CLOSE_SESSION:
         close_session(head, msgs, response);
+        break;
+    case CMD_EXIT:
+        response(CMD_EXIT, head.id, RES_DONE, "exit");
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        running = false;
+        std::exit(0);
         break;
     }
 };
